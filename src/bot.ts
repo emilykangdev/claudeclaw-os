@@ -789,6 +789,10 @@ async function handleMessage(ctx: Context, message: string, forceVoiceReply = fa
 /**
  * Auto-discover user-invocable skills from ~/.claude/skills/.
  * Reads SKILL.md frontmatter for name + description when user_invocable: true.
+ *
+ * Per-agent scoping: if frontmatter has `agents: [code, ops]` (YAML inline or
+ * block list), only those agents register the skill. Without an `agents:`
+ * field the skill is global.
  */
 function discoverSkillCommands(): Array<{ command: string; description: string }> {
   const skillsDir = path.join(os.homedir(), '.claude', 'skills');
@@ -816,6 +820,25 @@ function discoverSkillCommands(): Array<{ command: string; description: string }
 
       // Check user_invocable: true
       if (!/user_invocable:\s*true/i.test(fm)) continue;
+
+      // Per-agent scoping. Accepted forms:
+      //   agents: [code, ops]
+      //   agents:
+      //     - code
+      //     - ops
+      // If unset, the skill is global. If set and AGENT_ID isn't in the list,
+      // skip — this agent's Telegram menu won't surface the command.
+      const inlineMatch = fm.match(/^agents:\s*\[([^\]]*)\]/m);
+      const blockMatch = fm.match(/^agents:\s*\n((?:\s*-\s*[^\n]+\n?)+)/m);
+      if (inlineMatch || blockMatch) {
+        const allowed = (inlineMatch?.[1] ?? blockMatch?.[1] ?? '')
+          .split(/[\n,]/)
+          .map((s) => s.replace(/^\s*-\s*/, '').trim().toLowerCase())
+          .filter(Boolean);
+        if (allowed.length > 0 && !allowed.includes(AGENT_ID.toLowerCase())) {
+          continue;
+        }
+      }
 
       // Extract name
       const nameMatch = fm.match(/^name:\s*(.+)$/m);
