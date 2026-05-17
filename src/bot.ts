@@ -821,19 +821,25 @@ function discoverSkillCommands(): Array<{ command: string; description: string }
       // Check user_invocable: true
       if (!/user_invocable:\s*true/i.test(fm)) continue;
 
-      // Per-agent scoping. Accepted forms:
-      //   agents: [code, ops]
-      //   agents:
-      //     - code
-      //     - ops
+      // Per-agent scoping. Accepted forms (key match is case-insensitive):
+      //   agents: [code, ops]            agents: ["code", "ops"]
+      //   agents:                        agents:
+      //     - code                         - "code"
+      //     - ops                          - 'ops'
       // If unset, the skill is global. If set and AGENT_ID isn't in the list,
       // skip — this agent's Telegram menu won't surface the command.
-      const inlineMatch = fm.match(/^agents:\s*\[([^\]]*)\]/m);
-      const blockMatch = fm.match(/^agents:\s*\n((?:\s*-\s*[^\n]+\n?)+)/m);
+      const inlineMatch = fm.match(/^agents:\s*\[([^\]]*)\]/mi);
+      const blockMatch = fm.match(/^agents:\s*\n((?:\s*-\s*[^\n]+\n?)+)/mi);
       if (inlineMatch || blockMatch) {
         const allowed = (inlineMatch?.[1] ?? blockMatch?.[1] ?? '')
           .split(/[\n,]/)
-          .map((s) => s.replace(/^\s*-\s*/, '').trim().toLowerCase())
+          .map((s) =>
+            s
+              .replace(/^\s*-\s*/, '')       // strip block-list dash
+              .trim()
+              .replace(/^["']|["']$/g, '')   // strip surrounding YAML quotes
+              .toLowerCase(),
+          )
           .filter(Boolean);
         if (allowed.length > 0 && !allowed.includes(AGENT_ID.toLowerCase())) {
           continue;

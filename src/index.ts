@@ -76,7 +76,8 @@ if (AGENT_ID !== 'main') {
       }
       if (typeof raw['model'] === 'string') mainModel = raw['model'] as string;
       if (Array.isArray(raw['schedules'])) {
-        agentSchedules = (raw['schedules'] as Array<Record<string, unknown>>)
+        agentSchedules = (raw['schedules'] as unknown[])
+          .filter((s): s is Record<string, unknown> => !!s && typeof s === 'object')
           .map((s) => ({
             cron: typeof s.cron === 'string' ? s.cron.trim() : '',
             prompt: typeof s.prompt === 'string' ? s.prompt.trim() : '',

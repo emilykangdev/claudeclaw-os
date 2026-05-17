@@ -136,13 +136,15 @@ export function loadAgentConfig(agentId: string): AgentConfig {
     };
   }
 
-  const schedulesRaw = raw['schedules'] as Array<Record<string, unknown>> | undefined;
+  const schedulesRaw = raw['schedules'] as unknown[] | undefined;
   let schedules: AgentConfig['schedules'];
   if (Array.isArray(schedulesRaw)) {
     schedules = [];
     for (const s of schedulesRaw) {
-      const cron = typeof s.cron === 'string' ? s.cron.trim() : '';
-      const prompt = typeof s.prompt === 'string' ? s.prompt.trim() : '';
+      if (!s || typeof s !== 'object') continue; // skip null / primitives
+      const obj = s as Record<string, unknown>;
+      const cron = typeof obj.cron === 'string' ? obj.cron.trim() : '';
+      const prompt = typeof obj.prompt === 'string' ? obj.prompt.trim() : '';
       if (cron && prompt) schedules.push({ cron, prompt });
     }
   }

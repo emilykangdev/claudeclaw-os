@@ -24,7 +24,7 @@ Every weekday at 8am local time, send the user a Telegram digest of overnight em
 
 Format: plain text, no markdown headers, no em dashes. Keep the whole thing scannable in under 30 seconds.
 
-The 8am-weekday and optional 10am-weekend schedules live in `agent.yaml` under the `schedules:` block (see `agent.yaml.example` in this folder for the template). The agent reconciles those into scheduled_tasks on boot, so editing the cron or prompt and restarting is enough. No manual `schedule-cli create` step.
+For the morning digest specifically, the 8am-weekday and optional 10am-weekend crons live in `agent.yaml` under the `schedules:` block (see `agent.yaml.example` in this folder for the template). The agent reconciles those entries into `scheduled_tasks` on boot, so editing the cron or prompt and restarting is enough — no manual `schedule-cli create` for the digest. `schedule-cli create` is still the right tool for any ad-hoc or one-off schedules outside the declared `schedules:` block.
 
 ## Hive mind
 After completing any meaningful action, log it:

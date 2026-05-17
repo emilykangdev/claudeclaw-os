@@ -64,14 +64,19 @@ export function initScheduler(send: Sender, agentId = 'main'): void {
 }
 
 /**
- * Reconcile schedules declared in agent.yaml into scheduled_tasks. Two-way:
- * inserts rows for new declarations, deletes orphan `cfg-*` rows whose
- * declaration was removed or edited. Idempotent: each declared schedule maps
- * to a deterministic id derived from a hash of (agentId, cron, prompt), so
- * restarting the agent does not duplicate rows. Editing a schedule changes
- * the hash, which deletes the old row and inserts the new one on next boot.
- * Manual rows created via `schedule-cli create` use random ids (no `cfg-`
- * prefix) and are never touched.
+ * Reconcile schedules declared in agent.yaml into scheduled_tasks. Two-way
+ * AND drift-aware: agent.yaml is canonical for `cfg-*` rows.
+ *
+ * - New declarations get inserted (deterministic id, sha256 of agentId+cron+
+ *   prompt, prefixed `cfg-`).
+ * - Removed declarations get their `cfg-*` row deleted on the next boot.
+ * - Edited declarations hash to a new id; the old row is orphan-deleted and
+ *   the new row inserted.
+ * - If an existing `cfg-*` row's prompt/cron/agent_id diverges from the
+ *   declaration (e.g. someone edited it through the dashboard), the row is
+ *   wiped and reinserted from agent.yaml. Use `schedule-cli create` if you
+ *   want a row the dashboard can edit freely — those use random ids and the
+ *   reconciler never touches them.
  */
 export function reconcileConfigSchedules(
   agentId: string,
@@ -90,6 +95,7 @@ export function reconcileConfigSchedules(
   }
 
   let inserted = 0;
+  let restored = 0;
   for (const s of declared) {
     const fingerprint = crypto
       .createHash('sha256')
@@ -98,7 +104,21 @@ export function reconcileConfigSchedules(
       .slice(0, 12);
     const id = `cfg-${fingerprint}`;
 
-    if (getScheduledTaskById(id)) continue;
+    const existing = getScheduledTaskById(id);
+    if (existing) {
+      // Row exists. If its content matches the declaration, leave it alone
+      // (preserves last_run, next_run, status). If it diverged via dashboard
+      // edit, agent.yaml is canonical — wipe and reinsert from declaration.
+      if (
+        existing.prompt === s.prompt &&
+        existing.schedule === s.cron &&
+        existing.agent_id === agentId
+      ) {
+        continue;
+      }
+      deleteScheduledTask(id);
+      restored++;
+    }
 
     let nextRun: number;
     try {
@@ -113,7 +133,7 @@ export function reconcileConfigSchedules(
       continue;
     }
     createScheduledTask(id, s.prompt, s.cron, nextRun, agentId);
-    inserted++;
+    if (!existing) inserted++;
   }
 
   let deleted = 0;
@@ -124,9 +144,9 @@ export function reconcileConfigSchedules(
     deleted++;
   }
 
-  if (inserted > 0 || deleted > 0) {
+  if (inserted > 0 || deleted > 0 || restored > 0) {
     logger.info(
-      { agentId, inserted, deleted, total: declared.length },
+      { agentId, inserted, deleted, restored, total: declared.length },
       'Reconciled agent.yaml schedules',
     );
   }
