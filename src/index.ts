@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 
+import yaml from 'js-yaml';
 import { loadAgentConfig, listAgentIds, resolveAgentDir, resolveAgentClaudeMd, refreshWarRoomRoster } from './agent-config.js';
 import { createBot } from './bot.js';
 import { checkPendingMigrations } from './migrations.js';
@@ -15,7 +16,7 @@ import { runDecaySweep } from './memory.js';
 import { runWarroomAvatarMigration } from './avatars.js';
 import { initOAuthHealthCheck } from './oauth-health.js';
 import { initOrchestrator } from './orchestrator.js';
-import { initScheduler } from './scheduler.js';
+import { initScheduler, reconcileConfigSchedules } from './scheduler.js';
 import { setTelegramConnected, setBotInfo } from './state.js';
 import { getVenvPython, killProcess } from './platform.js';
 
@@ -26,8 +27,11 @@ const AGENT_ID = agentFlagIndex !== -1 ? process.argv[agentFlagIndex + 1] : 'mai
 // Export AGENT_ID to env so child processes (schedule-cli, etc.) inherit it
 process.env.CLAUDECLAW_AGENT_ID = AGENT_ID;
 
+let agentSchedules: Array<{ cron: string; prompt: string }> | undefined;
+
 if (AGENT_ID !== 'main') {
   const agentConfig = loadAgentConfig(AGENT_ID);
+  agentSchedules = agentConfig.schedules;
   const agentDir = resolveAgentDir(AGENT_ID);
   const claudeMdPath = resolveAgentClaudeMd(AGENT_ID);
   let systemPrompt: string | undefined;
@@ -47,25 +51,55 @@ if (AGENT_ID !== 'main') {
   });
   logger.info({ agentId: AGENT_ID, name: agentConfig.name }, 'Running as agent');
 } else {
-  // For main bot: read CLAUDE.md from CLAUDECLAW_CONFIG and inject it as
-  // systemPrompt — the same pattern used by sub-agents. Never copy the file
-  // into the repo; that defeats the purpose of CLAUDECLAW_CONFIG and risks
-  // accidentally committing personal config.
+  // For main bot: read CLAUDE.md and (optional) agent.yaml from CLAUDECLAW_CONFIG.
+  // CLAUDE.md becomes the system prompt; agent.yaml lets main pin a model and
+  // restrict which MCP servers it loads (matching the sub-agent pattern). Never
+  // copy these into the repo — they belong in CLAUDECLAW_CONFIG so personal
+  // config doesn't get committed.
   const externalClaudeMd = path.join(CLAUDECLAW_CONFIG, 'CLAUDE.md');
+  const mainAgentYaml = path.join(CLAUDECLAW_CONFIG, 'agents', 'main', 'agent.yaml');
+
+  let systemPrompt: string | undefined;
   if (fs.existsSync(externalClaudeMd)) {
-    let systemPrompt: string | undefined;
     try {
       systemPrompt = fs.readFileSync(externalClaudeMd, 'utf-8');
     } catch { /* unreadable */ }
-    if (systemPrompt) {
-      setAgentOverrides({
-        agentId: 'main',
-        botToken: activeBotToken,
-        cwd: PROJECT_ROOT,
-        systemPrompt,
-      });
-      logger.info({ source: externalClaudeMd }, 'Loaded CLAUDE.md from CLAUDECLAW_CONFIG');
+  }
+
+  let mainMcpServers: string[] | undefined;
+  let mainModel: string | undefined;
+  if (fs.existsSync(mainAgentYaml)) {
+    try {
+      const raw = yaml.load(fs.readFileSync(mainAgentYaml, 'utf-8')) as Record<string, unknown>;
+      if (Array.isArray(raw['mcp_servers'])) {
+        mainMcpServers = (raw['mcp_servers'] as unknown[]).filter((v): v is string => typeof v === 'string');
+      }
+      if (typeof raw['model'] === 'string') mainModel = raw['model'] as string;
+      if (Array.isArray(raw['schedules'])) {
+        agentSchedules = (raw['schedules'] as Array<Record<string, unknown>>)
+          .map((s) => ({
+            cron: typeof s.cron === 'string' ? s.cron.trim() : '',
+            prompt: typeof s.prompt === 'string' ? s.prompt.trim() : '',
+          }))
+          .filter((s) => s.cron && s.prompt);
+      }
+    } catch (err) {
+      logger.warn({ err, path: mainAgentYaml }, 'Failed to read main agent.yaml');
     }
+  }
+
+  if (systemPrompt || mainMcpServers || mainModel) {
+    setAgentOverrides({
+      agentId: 'main',
+      botToken: activeBotToken,
+      cwd: PROJECT_ROOT,
+      systemPrompt,
+      mcpServers: mainMcpServers,
+      model: mainModel,
+    });
+    if (systemPrompt) logger.info({ source: externalClaudeMd }, 'Loaded CLAUDE.md from CLAUDECLAW_CONFIG');
+    if (mainMcpServers) logger.info({ mcpServers: mainMcpServers }, 'Main MCP allowlist applied');
+    if (mainModel) logger.info({ model: mainModel }, 'Main model override applied');
   } else if (!fs.existsSync(path.join(PROJECT_ROOT, 'CLAUDE.md'))) {
     logger.warn(
       'No CLAUDE.md found. Copy CLAUDE.md.example to %s/CLAUDE.md and customize it.',
@@ -315,6 +349,7 @@ async function main(): Promise<void> {
   }
 
   if (ALLOWED_CHAT_ID) {
+    reconcileConfigSchedules(AGENT_ID, agentSchedules);
     initScheduler(
       async (text) => {
         // Split long messages to respect Telegram's 4096 char limit.

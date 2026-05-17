@@ -56,6 +56,15 @@ export interface AgentConfig {
   /** Display name shown in the meeting ("Your Agent wants to join"). Falls
    *  back to the agent's name or id with first letter capitalized. */
   meetBotName?: string;
+  /** Cron schedules declared in agent.yaml. The agent two-way reconciles
+   *  these into scheduled_tasks on boot using a deterministic id derived
+   *  from (agentId, cron, prompt). Adding, removing, or editing an entry
+   *  and restarting is the canonical way to manage recurring jobs the agent
+   *  owns: new entries insert, deleted entries get their `cfg-*` row removed,
+   *  edits hash to a new id (old row deleted, new row inserted on next boot).
+   *  Manual `schedule-cli create` rows (random ids, no `cfg-` prefix) are
+   *  never touched by the reconciler. */
+  schedules?: Array<{ cron: string; prompt: string }>;
 }
 
 /**
@@ -127,6 +136,17 @@ export function loadAgentConfig(agentId: string): AgentConfig {
     };
   }
 
+  const schedulesRaw = raw['schedules'] as Array<Record<string, unknown>> | undefined;
+  let schedules: AgentConfig['schedules'];
+  if (Array.isArray(schedulesRaw)) {
+    schedules = [];
+    for (const s of schedulesRaw) {
+      const cron = typeof s.cron === 'string' ? s.cron.trim() : '';
+      const prompt = typeof s.prompt === 'string' ? s.prompt.trim() : '';
+      if (cron && prompt) schedules.push({ cron, prompt });
+    }
+  }
+
   const mcpServers = raw['mcp_servers'] as string[] | undefined;
   // War-room tool policy override. If present in agent.yaml, this list
   // overrides the per-agent default in warroom-tool-policy.ts. Tokens
@@ -147,6 +167,7 @@ export function loadAgentConfig(agentId: string): AgentConfig {
     obsidian,
     meetVoiceId,
     meetBotName,
+    schedules,
   };
 }
 
@@ -174,6 +195,7 @@ export function listAgentIds(): string[] {
     if (!fs.existsSync(baseDir)) continue;
     for (const d of fs.readdirSync(baseDir)) {
       if (d.startsWith('_')) continue;
+      if (d === 'main') continue; // main is the root process, not a sub-agent
       const yamlPath = path.join(baseDir, d, 'agent.yaml');
       if (fs.existsSync(yamlPath)) ids.add(d);
     }

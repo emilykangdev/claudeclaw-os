@@ -1258,6 +1258,12 @@ export function getDueTasks(agentId = 'main'): ScheduledTask[] {
     .all(now, agentId) as ScheduledTask[];
 }
 
+export function getScheduledTaskById(id: string): ScheduledTask | undefined {
+  return db
+    .prepare('SELECT * FROM scheduled_tasks WHERE id = ?')
+    .get(id) as ScheduledTask | undefined;
+}
+
 export function getAllScheduledTasks(agentId?: string): ScheduledTask[] {
   if (agentId) {
     return db

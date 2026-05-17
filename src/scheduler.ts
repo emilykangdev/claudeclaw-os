@@ -1,8 +1,13 @@
+import crypto from 'crypto';
 import { CronExpressionParser } from 'cron-parser';
 
 import { AGENT_ID, ALLOWED_CHAT_ID, agentMcpAllowlist } from './config.js';
 import {
+  createScheduledTask,
+  deleteScheduledTask,
+  getAllScheduledTasks,
   getDueTasks,
+  getScheduledTaskById,
   getSession,
   logConversationTurn,
   markTaskRunning,
@@ -56,6 +61,75 @@ export function initScheduler(send: Sender, agentId = 'main'): void {
 
   setInterval(() => void runDueTasks(), 60_000);
   logger.info({ agentId }, 'Scheduler started (checking every 60s)');
+}
+
+/**
+ * Reconcile schedules declared in agent.yaml into scheduled_tasks. Two-way:
+ * inserts rows for new declarations, deletes orphan `cfg-*` rows whose
+ * declaration was removed or edited. Idempotent: each declared schedule maps
+ * to a deterministic id derived from a hash of (agentId, cron, prompt), so
+ * restarting the agent does not duplicate rows. Editing a schedule changes
+ * the hash, which deletes the old row and inserts the new one on next boot.
+ * Manual rows created via `schedule-cli create` use random ids (no `cfg-`
+ * prefix) and are never touched.
+ */
+export function reconcileConfigSchedules(
+  agentId: string,
+  schedules: Array<{ cron: string; prompt: string }> | undefined,
+): void {
+  const declared = schedules ?? [];
+
+  const expectedIds = new Set<string>();
+  for (const s of declared) {
+    const fingerprint = crypto
+      .createHash('sha256')
+      .update(`${agentId}\0${s.cron}\0${s.prompt}`)
+      .digest('hex')
+      .slice(0, 12);
+    expectedIds.add(`cfg-${fingerprint}`);
+  }
+
+  let inserted = 0;
+  for (const s of declared) {
+    const fingerprint = crypto
+      .createHash('sha256')
+      .update(`${agentId}\0${s.cron}\0${s.prompt}`)
+      .digest('hex')
+      .slice(0, 12);
+    const id = `cfg-${fingerprint}`;
+
+    if (getScheduledTaskById(id)) continue;
+
+    let nextRun: number;
+    try {
+      nextRun = Math.floor(
+        CronExpressionParser.parse(s.cron, { currentDate: new Date() })
+          .next()
+          .getTime() / 1000,
+      );
+    } catch (err) {
+      logger.error({ err, cron: s.cron, agentId }, 'Invalid cron in agent.yaml schedules; skipping');
+      expectedIds.delete(id); // skipped insert means orphan-sweep shouldn't expect it
+      continue;
+    }
+    createScheduledTask(id, s.prompt, s.cron, nextRun, agentId);
+    inserted++;
+  }
+
+  let deleted = 0;
+  for (const row of getAllScheduledTasks(agentId)) {
+    if (!row.id.startsWith('cfg-')) continue;
+    if (expectedIds.has(row.id)) continue;
+    deleteScheduledTask(row.id);
+    deleted++;
+  }
+
+  if (inserted > 0 || deleted > 0) {
+    logger.info(
+      { agentId, inserted, deleted, total: declared.length },
+      'Reconciled agent.yaml schedules',
+    );
+  }
 }
 
 async function runDueTasks(): Promise<void> {
