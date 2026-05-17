@@ -65,18 +65,26 @@ export function initScheduler(send: Sender, agentId = 'main'): void {
 
 /**
  * Reconcile schedules declared in agent.yaml into scheduled_tasks. Two-way
- * AND drift-aware: agent.yaml is canonical for `cfg-*` rows.
+ * and drift-aware on CONTENT only.
+ *
+ * The split: agent.yaml is canonical for content (prompt, cron, agent_id).
+ * The dashboard owns status (paused / active). This keeps a deliberate pause
+ * sticky across restarts so a user who turns off a recurring job doesn't get
+ * silently overridden the next time the agent boots.
  *
  * - New declarations get inserted (deterministic id, sha256 of agentId+cron+
  *   prompt, prefixed `cfg-`).
  * - Removed declarations get their `cfg-*` row deleted on the next boot.
  * - Edited declarations hash to a new id; the old row is orphan-deleted and
- *   the new row inserted.
+ *   the new row inserted with default `active` status.
  * - If an existing `cfg-*` row's prompt/cron/agent_id diverges from the
- *   declaration (e.g. someone edited it through the dashboard), the row is
- *   wiped and reinserted from agent.yaml. Use `schedule-cli create` if you
- *   want a row the dashboard can edit freely — those use random ids and the
- *   reconciler never touches them.
+ *   declaration (e.g. someone edited the content via the dashboard), the
+ *   row is wiped and reinserted from agent.yaml with default `active` status.
+ * - If the row matches the declaration but is paused, the `paused` status is
+ *   preserved. To re-enable, resume via dashboard or `schedule-cli resume`.
+ *
+ * Use `schedule-cli create` if you want a row the dashboard can edit freely —
+ * those use random ids and the reconciler never touches them.
  */
 export function reconcileConfigSchedules(
   agentId: string,
