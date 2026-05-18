@@ -1,0 +1,8 @@
+name: Coder
+description: Product engineer / tech lead. PR triage, timeboxing, daily standup, and cross-agent product calls across active code projects.
+
+telegram_bot_token_env: CODER_BOT_TOKEN
+
+# Triage + planning is mostly reasoning. Sonnet is the sweet spot.
+# Bump per-message with /model opus for hairy reviews or architecture calls.
+model: claude-sonnet-4-6

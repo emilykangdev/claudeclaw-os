@@ -43,6 +43,11 @@ if [ "$(uname)" = "Darwin" ]; then
     <string>--agent</string>
     <string>${AGENT_ID}</string>
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>$(dirname "$NODE_PATH"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
   <key>WorkingDirectory</key>
   <string>${PROJECT_DIR}</string>
   <key>RunAtLoad</key>

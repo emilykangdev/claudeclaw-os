@@ -1,8 +1,13 @@
+import crypto from 'crypto';
 import { CronExpressionParser } from 'cron-parser';
 
 import { AGENT_ID, ALLOWED_CHAT_ID, agentMcpAllowlist } from './config.js';
 import {
+  createScheduledTask,
+  deleteScheduledTask,
+  getAllScheduledTasks,
   getDueTasks,
+  getScheduledTaskById,
   getSession,
   logConversationTurn,
   markTaskRunning,
@@ -56,6 +61,103 @@ export function initScheduler(send: Sender, agentId = 'main'): void {
 
   setInterval(() => void runDueTasks(), 60_000);
   logger.info({ agentId }, 'Scheduler started (checking every 60s)');
+}
+
+/**
+ * Reconcile schedules declared in agent.yaml into scheduled_tasks. Two-way
+ * and drift-aware on CONTENT only.
+ *
+ * The split: agent.yaml is canonical for content (prompt, cron, agent_id).
+ * The dashboard owns status (paused / active). This keeps a deliberate pause
+ * sticky across restarts so a user who turns off a recurring job doesn't get
+ * silently overridden the next time the agent boots.
+ *
+ * - New declarations get inserted (deterministic id, sha256 of agentId+cron+
+ *   prompt, prefixed `cfg-`).
+ * - Removed declarations get their `cfg-*` row deleted on the next boot.
+ * - Edited declarations hash to a new id; the old row is orphan-deleted and
+ *   the new row inserted with default `active` status.
+ * - If an existing `cfg-*` row's prompt/cron/agent_id diverges from the
+ *   declaration (e.g. someone edited the content via the dashboard), the
+ *   row is wiped and reinserted from agent.yaml with default `active` status.
+ * - If the row matches the declaration but is paused, the `paused` status is
+ *   preserved. To re-enable, resume via dashboard or `schedule-cli resume`.
+ *
+ * Use `schedule-cli create` if you want a row the dashboard can edit freely —
+ * those use random ids and the reconciler never touches them.
+ */
+export function reconcileConfigSchedules(
+  agentId: string,
+  schedules: Array<{ cron: string; prompt: string }> | undefined,
+): void {
+  const declared = schedules ?? [];
+
+  const expectedIds = new Set<string>();
+  for (const s of declared) {
+    const fingerprint = crypto
+      .createHash('sha256')
+      .update(`${agentId}\0${s.cron}\0${s.prompt}`)
+      .digest('hex')
+      .slice(0, 12);
+    expectedIds.add(`cfg-${fingerprint}`);
+  }
+
+  let inserted = 0;
+  let restored = 0;
+  for (const s of declared) {
+    const fingerprint = crypto
+      .createHash('sha256')
+      .update(`${agentId}\0${s.cron}\0${s.prompt}`)
+      .digest('hex')
+      .slice(0, 12);
+    const id = `cfg-${fingerprint}`;
+
+    const existing = getScheduledTaskById(id);
+    if (existing) {
+      // Row exists. If its content matches the declaration, leave it alone
+      // (preserves last_run, next_run, status). If it diverged via dashboard
+      // edit, agent.yaml is canonical — wipe and reinsert from declaration.
+      if (
+        existing.prompt === s.prompt &&
+        existing.schedule === s.cron &&
+        existing.agent_id === agentId
+      ) {
+        continue;
+      }
+      deleteScheduledTask(id);
+      restored++;
+    }
+
+    let nextRun: number;
+    try {
+      nextRun = Math.floor(
+        CronExpressionParser.parse(s.cron, { currentDate: new Date() })
+          .next()
+          .getTime() / 1000,
+      );
+    } catch (err) {
+      logger.error({ err, cron: s.cron, agentId }, 'Invalid cron in agent.yaml schedules; skipping');
+      expectedIds.delete(id); // skipped insert means orphan-sweep shouldn't expect it
+      continue;
+    }
+    createScheduledTask(id, s.prompt, s.cron, nextRun, agentId);
+    if (!existing) inserted++;
+  }
+
+  let deleted = 0;
+  for (const row of getAllScheduledTasks(agentId)) {
+    if (!row.id.startsWith('cfg-')) continue;
+    if (expectedIds.has(row.id)) continue;
+    deleteScheduledTask(row.id);
+    deleted++;
+  }
+
+  if (inserted > 0 || deleted > 0 || restored > 0) {
+    logger.info(
+      { agentId, inserted, deleted, restored, total: declared.length },
+      'Reconciled agent.yaml schedules',
+    );
+  }
 }
 
 async function runDueTasks(): Promise<void> {

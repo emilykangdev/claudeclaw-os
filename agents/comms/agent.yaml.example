@@ -15,3 +15,13 @@ model: claude-sonnet-4-6
 #     - Inbox/
 #   read_only:
 #     - Daily Notes/
+
+# Optional: cron schedules the comms agent owns. The agent reconciles these
+# into scheduled_tasks on boot (insert + delete). Editing the cron or prompt
+# replaces the old row on next restart. Manual `schedule-cli create` rows
+# are untouched.
+# schedules:
+#   - cron: "0 8 * * 1-5"
+#     prompt: "Send the morning email digest per CLAUDE.md instructions."
+#   - cron: "0 10 * * 0,6"
+#     prompt: "Send the weekend email digest per CLAUDE.md instructions."
