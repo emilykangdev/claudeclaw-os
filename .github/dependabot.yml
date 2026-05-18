@@ -1,0 +1,71 @@
+# Dependabot configuration.
+#
+# Three ecosystems: npm at the repo root, pip in warroom/ and in the pika
+# video-meeting skill. Weekly cadence Monday 9am Los Angeles. Minor + patch
+# bumps are grouped into a single PR per ecosystem to cut noise; major
+# bumps land as individual PRs so they're easy to inspect.
+#
+# The code agent's auto-merge policy treats `dependabot[bot]` PRs as
+# eligible for auto-merge; the grouping here means most weeks the code
+# agent merges one or two grouped PRs without involving Emily.
+version: 2
+
+updates:
+  # Main bot (Node / npm)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/Los_Angeles"
+    assignees:
+      - "emilykangdev"
+    labels:
+      - "dependencies"
+    open-pull-requests-limit: 10
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # War-room Python (pipecat, voice stack)
+  - package-ecosystem: "pip"
+    directory: "/warroom"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/Los_Angeles"
+    assignees:
+      - "emilykangdev"
+    labels:
+      - "dependencies"
+      - "warroom"
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Pika video-meeting skill Python
+  - package-ecosystem: "pip"
+    directory: "/skills/pikastream-video-meeting"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/Los_Angeles"
+    assignees:
+      - "emilykangdev"
+    labels:
+      - "dependencies"
+      - "skills"
+    open-pull-requests-limit: 3
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
